@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+numpy
+scipy
+pandas
+pydantic
+pytest
+httpx
+# optional: real-ticker calibration (code falls back to synthetic if absent)
+yfinance

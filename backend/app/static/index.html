@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Market Microstructure Simulator</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root { --bg:#0d1117; --panel:#161b22; --ink:#e6edf3; --muted:#8b98a5; --accent:#a371f7; --pos:#3fb950; --neg:#f85149; }
+    * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--ink); font-family:system-ui,Segoe UI,Roboto,sans-serif; }
+    header { padding:16px 24px; border-bottom:1px solid #21262d; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; }
+    h1 { margin:0; font-size:20px; } .sub { color:var(--muted); font-size:13px; margin-top:4px; }
+    select, button { background:#0d1117; color:var(--ink); border:1px solid #30363d; border-radius:6px; padding:6px 10px; font-size:13px; } button{cursor:pointer;} button:hover{border-color:var(--accent);}
+    .bar { display:flex; gap:18px; padding:12px 24px; flex-wrap:wrap; background:var(--panel); border-bottom:1px solid #21262d; }
+    .stat { font-size:13px; } .stat b { color:var(--ink); font-size:15px; } .stat span { color:var(--muted); display:block; font-size:11px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:16px 24px; }
+    .card { background:var(--panel); border:1px solid #21262d; border-radius:10px; padding:14px; } .full { grid-column:1/-1; }
+    .card h2 { font-size:14px; margin:0 0 10px; color:var(--accent); font-weight:600; }
+    .plot { width:100%; height:300px; } .tall { height:340px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Market Microstructure Simulator</h1>
+      <div class="sub">Zero-intelligence + Hawkes order flow through a price-time-priority book &rarr; emergent stylized facts.</div>
+    </div>
+    <div>
+      <label class="sub">scenario&nbsp;</label>
+      <select id="scenario" onchange="loadAll()"></select>
+    </div>
+  </header>
+
+  <div class="bar" id="statbar"></div>
+
+  <div class="grid">
+    <div class="card full"><h2>Mid-price tape</h2><div id="midPlot" class="plot"></div></div>
+    <div class="card"><h2>Bid-ask spread (ticks)</h2><div id="spreadPlot" class="plot"></div></div>
+    <div class="card"><h2>Order-book depth (final snapshot)</h2><div id="bookPlot" class="plot"></div></div>
+    <div class="card"><h2>Return distribution (fat tails)</h2><div id="histPlot" class="plot"></div></div>
+    <div class="card"><h2>|return| autocorrelation (vol clustering)</h2><div id="acfPlot" class="plot"></div></div>
+    <div class="card full"><h2>Price impact (square-root law)</h2><div id="impactPlot" class="plot tall"></div></div>
+  </div>
+
+<script>
+const LAYOUT={paper_bgcolor:'transparent',plot_bgcolor:'transparent',font:{color:'#e6edf3',size:11},margin:{l:50,r:16,t:10,b:36},xaxis:{gridcolor:'#21262d'},yaxis:{gridcolor:'#21262d'},showlegend:false};
+const CFG={displayModeBar:false,responsive:true};
+const api=p=>fetch(p).then(r=>r.json());
+
+async function init(){
+  const s=await api('/api/scenarios');
+  document.getElementById('scenario').innerHTML=s.scenarios.map(x=>`<option>${x}</option>`).join('');
+  loadAll();
+}
+
+async function loadAll(){
+  const sc=document.getElementById('scenario').value||'balanced';
+  const [run, sf, imp, book]=await Promise.all([
+    api('/api/demo/run?scenario='+sc),
+    api('/api/demo/stylized-facts?scenario='+sc),
+    api('/api/demo/impact?scenario='+sc),
+    api('/api/demo/book?scenario='+sc),
+  ]);
+
+  document.getElementById('statbar').innerHTML=
+    stat('events',run.n_events)+stat('trades',run.n_trades)+
+    stat('excess kurtosis',sf.excess_kurtosis.toFixed(2))+
+    stat('return ACF(1)',sf.return_acf_lag1.toFixed(3))+
+    stat("Kyle &lambda;",imp.kyle_lambda.toExponential(2))+
+    stat('final mid',run.mids[run.mids.length-1].toFixed(1));
+
+  Plotly.newPlot('midPlot',[{x:run.times,y:run.mids,type:'scatter',line:{color:'#a371f7',width:1}}],
+    Object.assign({},LAYOUT,{xaxis:{title:'time',gridcolor:'#21262d'},yaxis:{title:'mid (ticks)',gridcolor:'#21262d'}}),CFG);
+
+  Plotly.newPlot('spreadPlot',[{x:run.times,y:run.spreads,type:'scatter',line:{color:'#4da3ff',width:1}}],LAYOUT,CFG);
+
+  const bp=book.snapshot.bids, ap=book.snapshot.asks;
+  Plotly.newPlot('bookPlot',[
+    {x:bp.map(l=>l[0]),y:bp.map(l=>l[1]),type:'bar',name:'bids',marker:{color:'#3fb950'}},
+    {x:ap.map(l=>l[0]),y:ap.map(l=>l[1]),type:'bar',name:'asks',marker:{color:'#f85149'}},
+  ],Object.assign({},LAYOUT,{showlegend:true,legend:{orientation:'h'},barmode:'overlay'}),CFG);
+
+  // returns histogram from downsampled mids
+  const m=run.mids, rets=[];
+  for(let i=1;i<m.length;i++){ if(m[i]>0&&m[i-1]>0) rets.push(Math.log(m[i]/m[i-1])); }
+  Plotly.newPlot('histPlot',[{x:rets,type:'histogram',marker:{color:'#a371f7'},nbinsx:60}],LAYOUT,CFG);
+
+  Plotly.newPlot('acfPlot',[{x:sf.lags,y:sf.abs_return_acf,type:'bar',marker:{color:'#4da3ff'}}],
+    Object.assign({},LAYOUT,{xaxis:{title:'lag',gridcolor:'#21262d'},yaxis:{title:'ACF',gridcolor:'#21262d'}}),CFG);
+
+  Plotly.newPlot('impactPlot',[{x:imp.Q,y:imp.sqrt_impact,type:'scatter',line:{color:'#f0a500'},fill:'tozeroy',fillcolor:'rgba(240,165,0,.1)'}],
+    Object.assign({},LAYOUT,{xaxis:{title:'order size Q',gridcolor:'#21262d'},yaxis:{title:'impact',gridcolor:'#21262d'}}),CFG);
+}
+function stat(label,val){ return `<div class="stat"><b>${val}</b><span>${label}</span></div>`; }
+init();
+</script>
+</body>
+</html>

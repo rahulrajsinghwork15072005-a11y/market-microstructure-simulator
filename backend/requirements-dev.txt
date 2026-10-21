@@ -1,0 +1,6 @@
+# Dev/CI tooling — kept separate from the runtime requirements.txt so the
+# production image stays lean. Install with: pip install -r requirements-dev.txt
+-r requirements.txt
+ruff
+mypy
+pytest-cov
